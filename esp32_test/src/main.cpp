@@ -1,36 +1,42 @@
 #include <Arduino.h>
+#include <math.h>
 
-// === Motor and Encoder Pins ===
-#define ENCODER_PIN_A 4
-#define ENCODER_PIN_B 5
-#define MOTOR_EN   15
-#define MOTOR_IN1  16
-#define MOTOR_IN2  17
+// === Robot Geometry ===
+#define WHEEL_RADIUS 0.033f     // meters
+#define WHEEL_BASE   0.195f     // meters
+#define TICKS_PER_REV 1250
 
-// === Motor and Encoder Config ===
-#define TICKS_PER_REV     1250
-#define WHEEL_RADIUS      0.033f
-#define PWM_CHANNEL       0
-#define PWM_FREQ          20000
-#define PWM_RESOLUTION    8
-#define MIN_EFFECTIVE_PWM 70
-#define MAX_PWM           255
-#define MAX_VELOCITY      0.35f
+// === Motor & Encoder Pins ===
+#define ENCODER1_PIN_A 4
+#define ENCODER1_PIN_B 5
+#define ENCODER2_PIN_B 6
+#define ENCODER2_PIN_A 7
+#define MOTOR1_EN   15
+#define MOTOR1_IN1  17
+#define MOTOR1_IN2  16
+#define MOTOR2_IN1  8
+#define MOTOR2_IN2  18
+#define MOTOR2_EN   3
 
-// === PID parameters ===
-// float Kp = 700.0f;
-// float Ki = 10.0f;
-// float Kd = 5.0f;
-float Kp = 400.0f;
-float Ki = 15.0f;
-float Kd = 20.0f;
+#define PWM_CHANNEL1 0
+#define PWM_CHANNEL2 1
+#define PWM_FREQ     20000
+#define PWM_RES      8
+#define MAX_PWM      255
+#define MIN_PWM      70
+#define MAX_VELOCITY 0.35f
 
+// === PID gains ===
+float Kp = 400.0f, Ki = 15.0f, Kd = 20.0f;
 
-volatile int32_t encoder_count = 0;
-float target_velocity = 0.0f;
-float integral = 0.0f;
-float last_error = 0.0f;
+volatile int32_t encoder1_count = 0;
+volatile int32_t encoder2_count = 0;
+float target_v = 0.0f, target_w = 0.0f;
+float integral1 = 0, integral2 = 0, last_err1 = 0, last_err2 = 0;
 unsigned long last_time = 0;
+
+// === Odometry State ===
+float x = 0.0f, y = 0.0f, theta = 0.0f;
 
 // === Feedforward Mapping - Forward ===
 float pwmFromVelocity(float v_target) {
@@ -80,112 +86,125 @@ float pwmFromVelocityReverse(float v_target) {
     return 0;
 }
 
-// === Encoder ISR ===
-void IRAM_ATTR encoderISR() {
-    bool A = digitalRead(ENCODER_PIN_A);
-    bool B = digitalRead(ENCODER_PIN_B);
-    encoder_count += (A == B) ? 1 : -1;
+void IRAM_ATTR encoder1ISR() {
+    bool A = digitalRead(ENCODER1_PIN_A);
+    bool B = digitalRead(ENCODER1_PIN_B);
+    encoder1_count += (A == B) ? 1 : -1;
 }
 
-// === PWM Limit Enforcement ===
+void IRAM_ATTR encoder2ISR() {
+    bool A = digitalRead(ENCODER2_PIN_A);
+    bool B = digitalRead(ENCODER2_PIN_B);
+    encoder2_count += (A == B) ? 1 : -1;
+}
+
 int limitPWM(float pwm) {
     pwm = fabs(pwm);
     if (pwm > MAX_PWM) return MAX_PWM;
-    if (pwm < MIN_EFFECTIVE_PWM) return (pwm > 1e-2 ? MIN_EFFECTIVE_PWM : 0);
+    if (pwm < MIN_PWM) return (pwm > 1e-2 ? MIN_PWM : 0);
     return (int)pwm;
 }
 
-// === Apply Motor Control ===
-void applyMotorPWM(int pwm, int direction) {
-    if (direction == 1) {
-        digitalWrite(MOTOR_IN1, LOW);
-        digitalWrite(MOTOR_IN2, HIGH);
-    } else if (direction == -1) {
-        digitalWrite(MOTOR_IN1, HIGH);
-        digitalWrite(MOTOR_IN2, LOW);
-    } else {
-        digitalWrite(MOTOR_IN1, LOW);
-        digitalWrite(MOTOR_IN2, LOW);
-        pwm = 0;
-    }
-    ledcWrite(PWM_CHANNEL, pwm);
+void applyMotorPWM(int en_pin, int in1, int in2, int pwm_channel, int pwm, int dir) {
+    digitalWrite(in1, dir > 0);
+    digitalWrite(in2, dir < 0);
+    ledcWrite(pwm_channel, pwm);
 }
 
-// === Setup ===
+void handleSerialCommand(String input) {
+    input.trim();
+    if (input.startsWith("set ")) {
+        input = input.substring(4);
+        int space = input.indexOf(' ');
+        if (space == -1) return;
+        String key = input.substring(0, space);
+        float val = input.substring(space + 1).toFloat();
+
+        if (key == "v") {
+            target_v = constrain(val, -MAX_VELOCITY, MAX_VELOCITY);
+            Serial.printf("Linear velocity set to %.3f\n", target_v);
+        } else if (key == "w") {
+            target_w = val;
+            Serial.printf("Angular velocity set to %.3f\n", target_w);
+        }
+    }
+}
+
 void setup() {
     Serial.begin(115200);
 
-    pinMode(MOTOR_IN1, OUTPUT);
-    pinMode(MOTOR_IN2, OUTPUT);
-    pinMode(MOTOR_EN, OUTPUT);
-    ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_RESOLUTION);
-    ledcAttachPin(MOTOR_EN, PWM_CHANNEL);
+    pinMode(MOTOR1_IN1, OUTPUT); pinMode(MOTOR1_IN2, OUTPUT);
+    pinMode(MOTOR2_IN1, OUTPUT); pinMode(MOTOR2_IN2, OUTPUT);
+    ledcSetup(PWM_CHANNEL1, PWM_FREQ, PWM_RES);
+    ledcAttachPin(MOTOR1_EN, PWM_CHANNEL1);
+    ledcSetup(PWM_CHANNEL2, PWM_FREQ, PWM_RES);
+    ledcAttachPin(MOTOR2_EN, PWM_CHANNEL2);
 
-    pinMode(ENCODER_PIN_A, INPUT_PULLUP);
-    pinMode(ENCODER_PIN_B, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_A), encoderISR, CHANGE);
+    pinMode(ENCODER1_PIN_A, INPUT_PULLUP);
+    pinMode(ENCODER1_PIN_B, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(ENCODER1_PIN_A), encoder1ISR, CHANGE);
+    pinMode(ENCODER2_PIN_A, INPUT_PULLUP);
+    pinMode(ENCODER2_PIN_B, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(ENCODER2_PIN_A), encoder2ISR, CHANGE);
 
-    Serial.println("Enter velocity in m/s (±0.35):");
+    last_time = millis();
+    Serial.println("Use: set v <val>, set w <val>");
 }
 
-// === Main Loop ===
 void loop() {
-    static int32_t last_encoder = 0;
-    static int last_direction = 0;
-
     if (Serial.available()) {
-        String input = Serial.readStringUntil('\n');
-        target_velocity = input.toFloat();
-        if (target_velocity > MAX_VELOCITY) {
-            target_velocity = MAX_VELOCITY;
-            Serial.println("Clamped to max forward velocity: 0.35 m/s");
-        } else if (target_velocity < -MAX_VELOCITY) {
-            target_velocity = -MAX_VELOCITY;
-            Serial.println("Clamped to max reverse velocity: -0.35 m/s");
-        }
-        Serial.printf("Target velocity set to: %.3f m/s\n", target_velocity);
+        String cmd = Serial.readStringUntil('\n');
+        handleSerialCommand(cmd);
     }
 
     unsigned long now = millis();
     float dt = (now - last_time) / 1000.0f;
     if (dt < 0.01f) return;
-
-    int32_t current_encoder = encoder_count;
-    int ticks = current_encoder - last_encoder;
-    float ticks_per_sec = ticks / dt;
-    float revs_per_sec = ticks_per_sec / TICKS_PER_REV;
-    float angular_velocity = revs_per_sec * 2.0f * PI;
-    float linear_velocity = angular_velocity * WHEEL_RADIUS;
-
-    int direction = (target_velocity > 0) ? 1 :
-                    (target_velocity < 0) ? -1 : 0;
-
-    if (direction != last_direction) {
-        integral = 0;
-        last_error = 0;
-        last_time = now;
-        Serial.println("Direction changed — PID reset");
-    }
-    last_direction = direction;
-
-    float ff_pwm = (target_velocity > 0)
-        ? pwmFromVelocity(target_velocity)
-        : pwmFromVelocityReverse(-target_velocity);
-
-    float error = fabs(target_velocity) - fabs(linear_velocity);
-    integral += error * dt;
-    float derivative = (error - last_error) / dt;
-    float pid_term = Kp * error + Ki * integral + Kd * derivative;
-    last_error = error;
     last_time = now;
 
-    float total_pwm = ff_pwm + pid_term;  // PID assists only
-    int pwm = limitPWM(total_pwm);
-    applyMotorPWM(pwm, direction);
+    int32_t c1 = encoder1_count;
+    int32_t c2 = encoder2_count;
+    encoder1_count = 0;
+    encoder2_count = 0;
 
-    Serial.printf("v: %.3f m/s | target: %.3f | PWM: %d | FF: %.1f | PID: %.1f\n",
-                  linear_velocity, target_velocity, pwm, ff_pwm, pid_term);
+    float rps1 = (c1 / (float)TICKS_PER_REV) / dt;
+    float rps2 = (c2 / (float)TICKS_PER_REV) / dt;
+    float v1_actual = rps1 * 2 * PI * WHEEL_RADIUS;
+    float v2_actual = rps2 * 2 * PI * WHEEL_RADIUS;
 
-    last_encoder = current_encoder;
+    float v1_target = target_v - (target_w * WHEEL_BASE / 2);
+    float v2_target = target_v + (target_w * WHEEL_BASE / 2);
+
+    float err1 = fabs(v1_target) - fabs(v1_actual);
+    float err2 = fabs(v2_target) - fabs(v2_actual);
+    integral1 += err1 * dt;
+    integral2 += err2 * dt;
+    float d1 = (err1 - last_err1) / dt;
+    float d2 = (err2 - last_err2) / dt;
+    float pid1 = Kp * err1 + Ki * integral1 + Kd * d1;
+    float pid2 = Kp * err2 + Ki * integral2 + Kd * d2;
+    last_err1 = err1;
+    last_err2 = err2;
+
+    int dir1 = (v1_target > 0) ? 1 : (v1_target < 0 ? -1 : 0);
+    int dir2 = (v2_target > 0) ? 1 : (v2_target < 0 ? -1 : 0);
+
+    float ff1 = (dir1 > 0) ? pwmFromVelocity(v1_target) : pwmFromVelocityReverse(-v1_target);
+    float ff2 = (dir2 > 0) ? pwmFromVelocity(v2_target) : pwmFromVelocityReverse(-v2_target);
+    int pwm1 = limitPWM(ff1 + pid1);
+    int pwm2 = limitPWM(ff2 + pid2);
+
+    applyMotorPWM(MOTOR1_EN, MOTOR1_IN1, MOTOR1_IN2, PWM_CHANNEL1, pwm1, dir1);
+    applyMotorPWM(MOTOR2_EN, MOTOR2_IN1, MOTOR2_IN2, PWM_CHANNEL2, pwm2, dir2);
+
+    // === Odometry update ===
+    float v_avg = (v1_actual + v2_actual) / 2.0f;
+    float w_avg = (v2_actual - v1_actual) / WHEEL_BASE;
+    theta += w_avg * dt;
+    x += v_avg * cos(theta) * dt;
+    y += v_avg * sin(theta) * dt;
+
+    Serial.printf("L: %.2f (%.2f) | R: %.2f (%.2f) | PWM: %d %d | Pose: x=%.2f y=%.2f th=%.2f\n",
+                  v1_actual, v1_target, v2_actual, v2_target, pwm1, pwm2, x, y, theta);
     delay(100);
 }

@@ -4,6 +4,35 @@
 #include "motor_control.hpp"
 #include <Arduino.h>
 
+static float tar_lin_vel = 0.0f, tar_ang_vel = 0.0f;
+
+float getTargetLinearVelocity() {
+    return tar_lin_vel;
+}
+
+float getTargetAngularVelocity() {
+    return tar_ang_vel;
+}
+
+void handleSerialCommand(String input) {
+    input.trim();
+    if (input.startsWith("set ")) {
+        input = input.substring(4);
+        int space = input.indexOf(' ');
+        if (space == -1) return;
+        String key = input.substring(0, space);
+        float val = input.substring(space + 1).toFloat();
+
+        if (key == "v") {
+            tar_lin_vel = constrain(val, -MAX_VELOCITY, MAX_VELOCITY);
+            Serial.printf("Linear velocity set to %.3f\n", tar_lin_vel);
+        } else if (key == "w") {
+            tar_ang_vel = val;
+            Serial.printf("Angular velocity set to %.3f\n", tar_ang_vel);
+        }
+    }
+}
+
 void initSerial() {
     Serial.begin(115200);
     while (!Serial);
@@ -17,19 +46,13 @@ void sendOdometrySerial() {
     float ang_vel = getAngularVelocity();
 
     Serial.printf("%.2f,%.2f,%.2f\n", x, y, theta);
-    Serial.printf("v: %.2f m/s, ω: %.2f rad/s\n", lin_vel, ang_vel);
+    Serial.printf("L: %.2f (%.2f) | R: %.2f (%.2f)\n",
+                  getV1Actual(), getV1Target(), getV2Actual(), getV2Target());
 }
 
 void processSerialInput() {
     if (Serial.available()) {
-        String input = Serial.readStringUntil('\n');
-        int comma1 = input.indexOf(',');
-        int comma2 = input.lastIndexOf(',');
-
-        if (comma1 > 0 && comma2 > comma1) {
-            int left_pwm = input.substring(0, comma1).toInt();
-            int right_pwm = input.substring(comma1 + 1, comma2).toInt();
-            setMotorPWM(left_pwm, right_pwm);
-        }
+        String cmd = Serial.readStringUntil('\n');
+        handleSerialCommand(cmd);
     }
 }

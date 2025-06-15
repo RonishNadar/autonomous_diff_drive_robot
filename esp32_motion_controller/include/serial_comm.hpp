@@ -3,6 +3,8 @@
 #define SERIAL_COMM_HPP
 
 void initSerial();
+float getTargetLinearVelocity();
+float getTargetAngularVelocity();
 void sendOdometrySerial();
 void processSerialInput();
 

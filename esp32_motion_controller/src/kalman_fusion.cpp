@@ -1,6 +1,6 @@
 #include "kalman_fusion.hpp"
+#include "encoder.hpp"
 #include "imu.hpp"
-#include "odometry.hpp"
 
 // Kalman filter states
 static float x = 0, y = 0, theta = 0;
@@ -68,15 +68,18 @@ void updateVelocityFromOdometry(float current_x, float current_y, float current_
 }
 
 float getKalmanX() {
-    return x;
+    // return x;
+    return getOdomX();
 }
 
 float getKalmanY() {
-    return y;
+    // return y;
+    return getOdomY();
 }
 
 float getKalmanTheta() {
-    return theta;
+    // return theta;
+    return getOdomTheta();
 }
 
 float getLinearVelocity() {

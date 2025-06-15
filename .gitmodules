@@ -1,3 +1,6 @@
 [submodule "esp32_motion_controller/lib/SparkFun_BNO08x"]
 	path = esp32_motion_controller/lib/SparkFun_BNO08x
 	url = https://github.com/sparkfun/SparkFun_BNO08x_Arduino_Library.git
+[submodule "esp32_motion_controller/esp32_motion_controller/lib/SparkFun_BNO08x"]
+	path = esp32_motion_controller/esp32_motion_controller/lib/SparkFun_BNO08x
+	url = https://github.com/sparkfun/SparkFun_BNO08x_Arduino_Library.git
