@@ -4,6 +4,10 @@
 #include "motor_control.hpp"
 #include <Arduino.h>
 
+extern float v1_target, v2_target, v1_actual, v2_actual;
+extern int pwm1, pwm2, dir1, dir2;
+extern float ff1, ff2;
+extern float v1_actual, v2_actual;
 static float tar_lin_vel = 0.0f, tar_ang_vel = 0.0f;
 
 float getTargetLinearVelocity() {
@@ -46,8 +50,8 @@ void sendOdometrySerial() {
     float ang_vel = getAngularVelocity();
 
     Serial.printf("%.2f,%.2f,%.2f\n", x, y, theta);
-    Serial.printf("L: %.2f (%.2f) | R: %.2f (%.2f)\n",
-                  getV1Actual(), getV1Target(), getV2Actual(), getV2Target());
+    Serial.printf("L: %.2f (%.2f) | R: %.2f (%.2f) | PWM L: %d | PWM R: %d | DIR L: %d | DIR R: %d | FF L: %.2f | FF R: %.2f\n",
+                  v1_actual, v1_target, v2_actual, v1_target, pwm1, pwm2, dir1, dir2, v1_actual, v2_actual);
 }
 
 void processSerialInput() {

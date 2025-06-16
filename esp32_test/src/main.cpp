@@ -14,9 +14,9 @@
 #define MOTOR1_EN   15
 #define MOTOR1_IN1  17
 #define MOTOR1_IN2  16
-#define MOTOR2_IN1  8
-#define MOTOR2_IN2  18
-#define MOTOR2_EN   3
+#define MOTOR2_IN1  11
+#define MOTOR2_IN2  10
+#define MOTOR2_EN   12
 
 #define PWM_CHANNEL1 0
 #define PWM_CHANNEL2 1
